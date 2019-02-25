@@ -1,5 +1,9 @@
 <?php
 
+function random_hex() {
+  return hash('ripemd160', random_bytes(2048));
+}
+
 function trusona_custom_login($url, $allow_wp_form)
 {
     $allow_wp_form = apply_filters('trusona_allow_wp_form', $allow_wp_form, $url);
@@ -10,7 +14,35 @@ function trusona_custom_login($url, $allow_wp_form)
         $data .= '<style type="text/css">form > p {display: none;} p#nav {display: none;}</style>';
     }
 
-    $data .= '<div><a href="' . $url . '" alt="Login With Trusona" class="trusona-no-passwords-login-button">Login with Trusona</a></div>';
+    $nonce = random_hex();
+    $state = random_hex();
+
+$v2html = <<<HTML
+
+<div class="main">
+<p><a id="login-button" class="trusona-no-passwords-login-button" href="#">Sign In</a></p>
+<form id="oidc_form" style="visibility:hidden;" action="https://gateway.staging.trusona.net/oidc" method="POST">
+  <input type="hidden" name="scope" value="openid profile email emails" />
+  <input type="hidden" name="response_mode" value="form_post" />
+  <input type="hidden" name="response_type" value="id_token" />
+  <input type="hidden" name="client_id" value="wpuat" />
+  <input type="hidden" name="redirect_uri" value="https://54.202.19.37/499eda0e-787f-4f17-8b9d-08b5fac023da/wp-admin/admin-ajax.php?action=trusona_openid-callback" />
+  <input type="hidden" name="nonce" value="$nonce" />
+  <input type="hidden" name="state" value="$state" />
+</form>
+<script>
+  document.getElementById('login-button').onclick = function(e) {
+    e.preventDefault()
+    document.getElementById('oidc_form').submit()
+  }
+</script>
+</div>
+
+HTML;
+
+    //$data .= '<div><a href="' . $url . '" alt="Login With Trusona" class="trusona-no-passwords-login-button">Login with Trusona</a></div>';
+
+    $data .= $v2html ;
 
     if (isset($_GET['trusona-openid-error'])) {
         $err_code = $_GET['trusona-openid-error'];

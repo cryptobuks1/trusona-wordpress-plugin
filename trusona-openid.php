@@ -4,7 +4,7 @@
     Plugin Name: Trusona
     Plugin URI: https://wordpress.org/plugins/trusona/
     Description: Login to your WordPress with Trusona’s FREE #NoPasswords plugin. This plugin requires the Trusona app. View details for installation instructions.
-    Version: 1.4.2
+    Version: 1.4.3
     Author: Trusona
     Author URI: https://trusona.com
     License: MIT
@@ -52,8 +52,8 @@ class TrusonaOpenID
     {
         ob_start();
 
-        add_action('validate_registration_action', array($this, 'validate_registration'));
-        do_action('validate_registration_action');
+        //add_action('validate_registration_action', array($this, 'validate_registration'));
+        //do_action('validate_registration_action');
 
         add_action('wp_logout', array($this, 'trusona_openid_logout'));
         add_action('login_footer', array($this, 'login_footer'));
@@ -116,11 +116,6 @@ class TrusonaOpenID
 
     public function activate_defaults()
     {
-        if ($this->is_not_registered()) {
-            $this->remote_registration();
-        }
-
-        if ($this->is_registered()) {
             update_option(self::PLUGIN_ID_PREFIX . 'userinfo_url', self::USERINFO_URL);
             update_option(self::PLUGIN_ID_PREFIX . 'login_url', self::LOGIN_URL);
             update_option(self::PLUGIN_ID_PREFIX . 'token_url', self::TOKEN_URL);
@@ -128,95 +123,6 @@ class TrusonaOpenID
             update_option(self::PLUGIN_ID_PREFIX . 'disable_wp_form', false);
             update_option(self::PLUGIN_ID_PREFIX . 'trusona_enabled', true);
             update_option(self::PLUGIN_ID_PREFIX . 'activation', time());
-        }
-    }
-
-    private function is_not_registered()
-    {
-        return !get_option(self::PLUGIN_ID_PREFIX . 'client_id', false)
-               || !get_option(self::PLUGIN_ID_PREFIX . 'client_secret', false);
-    }
-
-    private function is_registered()
-    {
-        return !$this->is_not_registered();
-    }
-
-    public function validate_registration()
-    {
-        if ($this->is_registered()) {
-            $local_hash  = compute_site_hash();
-            $stored_hash = get_option(self::PLUGIN_ID_PREFIX . 'site_hash', false);
-
-            if ($stored_hash === null) {
-                $this->remote_registration();
-            } elseif (strcmp($local_hash, $stored_hash) !== 0) {
-                $this->update_registration();
-            }
-        }
-    }
-
-    private function site_name()
-    {
-        $site_name = get_bloginfo('name');
-        return (!isset($site_name) || trim($site_name) == '' ? 'blog-with-no-name' : trim($site_name));
-    }
-
-    private function remote_registration()
-    {
-        $body       = array('redirect_uris' => array(home_url()), 'client_name' => $this->site_name());
-        $user_agent = 'WordPress ' . get_bloginfo('version') . '; ' . home_url();
-        $headers    = array('content-type' => 'application/json', 'user-agent' => $user_agent);
-
-        // reference - https://openid.net/specs/openid-connect-registration-1_0.html
-        $response = wp_safe_remote_post(
-            self::REGISTRATION_URL,
-          array('headers' => $headers,
-                'body'    => json_encode($body))
-        );
-
-        if (is_array($response) && intval($response['response']['code']) == 201) {
-            $this->debug_log("Trusona IDP registration completed successfully");
-
-            $body = json_decode($response['body'], true);
-            $hash = compute_site_hash();
-
-            $this->client_secret = $body['client_secret'];
-            $this->client_id     = $body['client_id'];
-
-            update_option(self::PLUGIN_ID_PREFIX . 'client_secret', $this->client_secret);
-            update_option(self::PLUGIN_ID_PREFIX . 'client_id', $this->client_id);
-            update_option(self::PLUGIN_ID_PREFIX . 'site_hash', $hash);
-        } else {
-            $this->debug_log("Trusona IDP registration failed");
-        }
-    }
-
-    private function update_registration()
-    {
-        $client_id     = get_option(self::PLUGIN_ID_PREFIX . 'client_id', null);
-        $client_secret = get_option(self::PLUGIN_ID_PREFIX . 'client_secret', null);
-
-        $user_agent = 'WordPress ' . get_bloginfo('version') . '; ' . home_url();
-        $body       = array('redirect_uris' => array(home_url()), 'client_secret' => $client_secret);
-        $headers    = array('content-type' => 'application/json', 'user-agent' => $user_agent);
-        $patch_url  = self::REGISTRATION_URL . '/' . $client_id;
-
-        $response = $this->safe_remote_patch($patch_url, array('headers' => $headers, 'body'    => json_encode($body)));
-
-        if (is_array($response) && intval($response['response']['code']) == 200) {
-            $this->debug_log("Trusona IDP update completed successfully");
-        } else {
-            $this->debug_log("Trusona IDP update failed");
-        }
-    }
-
-    private function safe_remote_patch($url, $args = array())
-    {
-        $args['reject_unsafe_urls'] = true;
-        $args['method'] = 'PATCH';
-
-        return wp_remote_request($url, $args);
     }
 
     public function deactivate_trusona()
@@ -234,111 +140,82 @@ class TrusonaOpenID
 
     public function callback()
     {
-        if (!isset($_GET['code'], $_GET['state'], $_GET['nonce'])) {
-            $this->error_redirect(1);
-            return;
-        } elseif (isset($_GET['error'])) {
-            $this->error_redirect(8);
-            return;
-        }
+      $email = NULL;
+      $subject = NULL;
 
-        $token_result = wp_remote_post(
-            $this->token_url,
-            array('body' => array(
-              'code'          => $_GET['code'],
-              'state'         => $_GET['state'],
-              'nonce'         => $_GET['nonce'],
-              'client_id'     => $this->client_id,
-              'client_secret' => $this->client_secret,
-              'redirect_uri'  => $this->redirect_url,
-              'grant_type'    => 'authorization_code'
-            ))
-        );
+      if($_SERVER['REQUEST_METHOD'] === "POST" && isset($_POST['id_token'])) {
+        $id_token = $_POST['id_token'];
+        $data = explode(".", $id_token, 3);
+        $claims = json_decode(base64_decode($data[1]), true);
 
-        if (is_wp_error($token_result)) {
-            $this->error_redirect(2);
-            return;
-        }
+            $this->debug_log("DATA => " . $data[1]);
 
-        $token_response = json_decode($token_result['body'], true);
-        $authenticated  = false;
+        $email = strtolower($claims['email']);
+        $subject = $claims['sub'];
+      }
+      else {
+        $this->error_redirect(8);
+        return;
+      }
 
-        if (isset($token_response['token_type'], $token_response['access_token'])) {
-            $authorization = "{$token_response['token_type']} {$token_response['access_token']}";
-            $headers       = array('Authorization' => $authorization);
+      if(!isset($email, $subject) && is_email($email)) {
+        $this->error_redirect(3);
+        return;
+      }
 
-            $get_response = wp_remote_get($this->userinfo_url, array('headers' => $headers));
-            $user_claim   = is_array($get_response) ? json_decode($get_response['body'], true) : null;
+      $authenticated  = false;
+      $users = array();
+      $user = get_user_by('email', strtolower($email));
 
-            if (is_wp_error($get_response) || !isset($user_claim)) {
-                $this->error_redirect(3);
-                return;
-            }
-        } elseif (isset($token_response['id_token'])) {
-            $jwt_arr    = explode('.', $token_response['id_token']);
-            $user_claim = json_decode(base64_decode($jwt_arr[1]), true);
+      if (isset($user) && $user instanceof WP_User && intval($user->ID) > 0) {
+        $users[] = $user;
+      }
+
+      if (count($users) > 0) {
+        list($is_admin, $user) = $this->has_admin($users);
+        wp_set_auth_cookie($user->ID, false);
+
+        update_user_meta($user->ID, self::PLUGIN_ID_PREFIX . 'subject', $subject);
+        update_user_meta($user->ID, self::PLUGIN_ID_PREFIX . 'enabled', true);
+        update_user_meta($user->ID, self::PLUGIN_ID_PREFIX . 'paired', true);
+
+        if ($is_admin) {
+          wp_safe_redirect(admin_url('/', 'https'));
+          exit;
         } else {
-            $this->error_redirect(4);
+          wp_safe_redirect(home_url('/', 'https'));
+          exit;
+        }
+      }
+
+      if (!$authenticated) {
+        $self_service = get_option(self::PLUGIN_ID_PREFIX . 'self_service_onboarding', false);
+
+        if($self_service) {
+          $password = hash('whirlpool', base64_encode(random_bytes(1024)) . $email . time());
+          $value = wp_create_user($email, $password, $email);
+
+          if(is_wp_error($value)) {
+            $this->debug_log("failed at creating self-service account");
+            $this->error_redirect(9);
             return;
-        }
-
-        if (is_array($user_claim['emails'])) {
-            $users = array();
-
-            foreach ($user_claim['emails'] as $email) {
-                $user = get_user_by('email', strtolower($email));
-
-                if (isset($user) && $user instanceof WP_User && intval($user->ID) > 0) {
-                    $users[] = $user;
-                }
-            }
-
-            if (count($users) > 0) {
-                list($is_admin, $user) = $this->has_admin($users);
-                $subject = $user_claim[self::SUBJECT_KEY];
-                wp_set_auth_cookie($user->ID, false);
-
-                update_user_meta($user->ID, self::PLUGIN_ID_PREFIX . 'subject_id', $subject);
-                update_user_meta($user->ID, self::PLUGIN_ID_PREFIX . 'enabled', true);
-                update_user_meta($user->ID, self::PLUGIN_ID_PREFIX . 'paired', true);
-
-                if ($is_admin) {
-                    wp_safe_redirect(admin_url());
-                    exit;
-                } else {
-                    wp_safe_redirect(home_url());
-                    exit;
-                }
-            }
-        }
-
-        if (!$authenticated) {
-          $self_service = get_option(self::PLUGIN_ID_PREFIX . 'self_service_onboarding', false);
-
-          if($self_service) {
-            $email = strtolower(wp_slash(array_shift($user_claim['emails'])));
-            $password = hash('whirlpool', base64_encode(random_bytes(1024)) . $email . time());
-            $value = wp_create_user($email, $password, $email);
-
-            if(is_wp_error($value)) {
-              $this->debug_log("failed at creating self-service account");
-              $this->error_redirect(9);
-            }
-            else {
-              $this->debug_log("successfully created self-service account");
-              wp_set_auth_cookie($value, false, false);
-
-              update_user_meta($value, self::PLUGIN_ID_PREFIX . 'enabled', true);
-              update_user_meta($value, self::PLUGIN_ID_PREFIX . 'paired', true);
-
-              wp_safe_redirect(home_url());
-              exit;
-            }
           }
           else {
-            $this->error_redirect(9);
+            $this->debug_log("successfully created self-service account");
+            wp_set_auth_cookie($value, false);
+
+            update_user_meta($value, self::PLUGIN_ID_PREFIX . 'enabled', true);
+            update_user_meta($value, self::PLUGIN_ID_PREFIX . 'paired', true);
+
+            wp_safe_redirect(home_url('/', 'https'));
+            exit;
           }
         }
+        else {
+          $this->error_redirect(9);
+          return;
+        }
+      }
     }
 
     public function admin_init()
